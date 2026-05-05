@@ -24,6 +24,14 @@ const SHOW_REASONING = true; // Set true to show <think> reasoning tags
 // 🔥 THINKING MODE TOGGLE (for models that support it)
 const ENABLE_THINKING_MODE = true; // Set true to send chat_template_kwargs: { thinking: true }
 
+// Models that actually support thinking mode — others will get a 400 error if you send it
+const THINKING_SUPPORTED_MODELS = [
+  'deepseek-ai/deepseek-r1',
+  'deepseek-ai/deepseek-r1-0528',
+  'qwen/qwen3-235b-a22b-instruct-2507',
+  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+];
+
 // Model mapping — updated May 2026
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'meta/llama-3.3-70b-instruct',
@@ -77,7 +85,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       messages,
       temperature: temperature || 0.6,
       max_tokens: max_tokens || 9024,
-      extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
+      extra_body: (ENABLE_THINKING_MODE && THINKING_SUPPORTED_MODELS.includes(nimModel))
+        ? { chat_template_kwargs: { thinking: true } }
+        : undefined,
       stream: stream || false
     };
 
