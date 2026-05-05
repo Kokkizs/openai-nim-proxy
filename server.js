@@ -9,30 +9,46 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-const NIM_API_KEY = process.env.NIM_API_KEY;
+const NIM_API_KEY = process.env.NIM_API_KEY; // Ensure this is set in your Leapcell environment
 
-// Health check restored
-app.get('/health', (req, res) => res.json({ status: 'ok', service: 'NVIDIA Proxy' }));
-app.get('/', (req, res) => res.send('Proxy is running.'));
+app.get('/health', (req, res) => res.status(200).send('OK'));
 
 app.post('/v1/chat/completions', async (req, res) => {
     try {
-        const payload = { ...req.body, stream: true };
-        const modelName = (payload.model || '').toLowerCase();
+        const rawModelName = req.body.model || '';
+        
+        // --- FIX 1: THE JANITOR UI FIX ---
+        // Strip "-thinking" so NVIDIA gets the real name, but Janitor still triggers the UI.
+        const actualModelName = rawModelName.replace('-thinking', '');
+        const modelLower = actualModelName.toLowerCase();
 
-        // Inject the required flags to force models to output 'reasoning_content'
-        if (modelName.includes('glm')) {
-            // Fix: Put chat_template_kwargs BACK inside extra_body as required by NVIDIA
+        // --- FIX 2: THE 500 ERROR FIX ---
+        // We map Janitor's 'developer' role back to 'system' to prevent NVIDIA from crashing.
+        // We also only pass strictly required parameters to avoid validation errors.
+        const payload = {
+            model: actualModelName,
+            stream: true,
+            temperature: req.body.temperature,
+            top_p: req.body.top_p,
+            max_tokens: Math.min(req.body.max_tokens || 4096, 4096),
+            messages: req.body.messages.map(msg => ({
+                role: msg.role === 'developer' ? 'system' : msg.role,
+                content: msg.content
+            }))
+        };
+
+        // --- FIX 3: THE NVIDIA THINKING PARAMS ---
+        if (modelLower.includes('glm')) {
             payload.extra_body = {
                 chat_template_kwargs: { enable_thinking: true, clear_thinking: false }
             };
-        } else if (modelName.includes('deepseek-v4') || modelName.includes('kimi-k2.6')) {
+        } else if (modelLower.includes('deepseek') || modelLower.includes('kimi-k2.6')) {
             payload.extra_body = {
                 chat_template_kwargs: { thinking: true }
             };
         }
-        // Note: 'kimi-k2-thinking' doesn't need extra_body flags, it thinks natively!
 
+        // Send to NVIDIA
         const response = await axios.post(`${NIM_API_BASE}/chat/completions`, payload, {
             headers: {
                 'Authorization': `Bearer ${NIM_API_KEY}`,
@@ -41,18 +57,24 @@ app.post('/v1/chat/completions', async (req, res) => {
             responseType: 'stream'
         });
 
+        // Pass headers for Server-Sent Events
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        // Pure Pass-Through! 
-        // JanitorAI natively reads reasoning_content, so we just pipe NVIDIA's stream directly to it.
+        // Pure pass-through back to JanitorAI
         response.data.pipe(res);
 
     } catch (error) {
-        console.error("Proxy error:", error.response?.data || error.message);
+        console.error("API Error encountered");
+        if (error.response && error.response.data) {
+            // Log the actual NVIDIA error stream to Leapcell console
+            error.response.data.on('data', chunk => console.error(chunk.toString()));
+        } else {
+            console.error(error.message);
+        }
         res.status(500).json({ error: { message: "Proxy error" } });
     }
 });
 
-app.listen(PORT, () => console.log(`Minimalist NVIDIA Proxy running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`));
