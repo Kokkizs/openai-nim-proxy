@@ -11,92 +11,48 @@ app.use(express.json({ limit: '50mb' }));
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-// This helper checks the model name you typed in Janitor and returns the correct NVIDIA "thinking" flag
-function getThinkingParams(model) {
-    const m = model.toLowerCase();
-    if (m.includes('deepseek')) return { thinking: true };
-    if (m.includes('kimi')) return { thinking: true };
-    if (m.includes('glm')) return { enable_thinking: true, clear_thinking: false };
-    if (m.includes('qwen')) return { enable_thinking: true };
-    return null;
-}
+// Health check restored
+app.get('/health', (req, res) => res.json({ status: 'ok', service: 'NVIDIA Proxy' }));
+app.get('/', (req, res) => res.send('Proxy is running.'));
 
 app.post('/v1/chat/completions', async (req, res) => {
     try {
-        const { model, messages, temperature, stream } = req.body;
-        
-        const thinkingParams = getThinkingParams(model);
+        const payload = { ...req.body, stream: true };
+        const modelName = (payload.model || '').toLowerCase();
 
-        const nimRequest = {
-            ...req.body, // Pass everything Janitor sent (temp, tokens, etc.)
-            model: model, // Use exactly what you typed in Janitor
-            extra_body: thinkingParams ? { chat_template_kwargs: thinkingParams } : undefined,
-            stream: true // We force stream to handle the thinking box injection
-        };
+        // Inject the required flags to force models to output 'reasoning_content'
+        if (modelName.includes('glm')) {
+            // Fix: Put chat_template_kwargs BACK inside extra_body as required by NVIDIA
+            payload.extra_body = {
+                chat_template_kwargs: { enable_thinking: true, clear_thinking: false }
+            };
+        } else if (modelName.includes('deepseek-v4') || modelName.includes('kimi-k2.6')) {
+            payload.extra_body = {
+                chat_template_kwargs: { thinking: true }
+            };
+        }
+        // Note: 'kimi-k2-thinking' doesn't need extra_body flags, it thinks natively!
 
-        const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-            headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
+        const response = await axios.post(`${NIM_API_BASE}/chat/completions`, payload, {
+            headers: {
+                'Authorization': `Bearer ${NIM_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
             responseType: 'stream'
         });
 
         res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
 
-        let buffer = '';
-        let isThinking = false;
-        let hasClosedThinkTag = false;
+        // Pure Pass-Through! 
+        // JanitorAI natively reads reasoning_content, so we just pipe NVIDIA's stream directly to it.
+        response.data.pipe(res);
 
-        response.data.on('data', (chunk) => {
-            buffer += chunk.toString();
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            lines.forEach(line => {
-                if (!line.startsWith('data: ') || line.includes('[DONE]')) {
-                    if (line.includes('[DONE]')) res.write('data: [DONE]\n\n');
-                    return;
-                }
-
-                try {
-                    const data = JSON.parse(line.slice(6));
-                    const delta = data.choices?.[0]?.delta || {};
-                    const reasoning = delta.reasoning_content || '';
-                    const content = delta.content || '';
-
-                    let outputContent = "";
-
-                    // 1. If the model starts "thinking", open the <think> tag for Janitor
-                    if (reasoning && !isThinking) {
-                        isThinking = true;
-                        outputContent += "<think>\n";
-                    }
-
-                    if (reasoning) outputContent += reasoning;
-
-                    // 2. If the model starts the actual "content", close the <think> tag
-                    if (content && isThinking && !hasClosedThinkTag) {
-                        hasClosedThinkTag = true;
-                        outputContent += "\n</think>\n\n";
-                    }
-
-                    if (content) outputContent += content;
-
-                    // 3. Send the formatted text back to Janitor in the standard 'content' field
-                    if (outputContent || delta.role) {
-                        data.choices[0].delta = { 
-                            ...(delta.role && { role: delta.role }), 
-                            content: outputContent 
-                        };
-                        res.write(`data: ${JSON.stringify(data)}\n\n`);
-                    }
-                } catch (e) {}
-            });
-        });
-
-        response.data.on('end', () => res.end());
     } catch (error) {
-        console.error("NVIDIA Error:", error.response?.data || error.message);
+        console.error("Proxy error:", error.response?.data || error.message);
         res.status(500).json({ error: { message: "Proxy error" } });
     }
 });
 
-app.listen(PORT, () => console.log(`Proxy running. Type your NVIDIA model ID directly into Janitor!`));
+app.listen(PORT, () => console.log(`Minimalist NVIDIA Proxy running on port ${PORT}`));
