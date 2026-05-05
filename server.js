@@ -15,8 +15,9 @@ app.use((req, res, next) => {
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
+// --- FIX 1: Set Thinking Mode to TRUE ---
 const SHOW_REASONING = true;
-const ENABLE_THINKING_MODE = false;
+const ENABLE_THINKING_MODE = true; 
 
 const THINKING_CONFIG = {
   'deepseek-ai/deepseek-r1':           { thinking: true },
@@ -105,6 +106,10 @@ app.post('/v1/chat/completions', async (req, res) => {
     let accumulatedReasoning = '';
     let lastChunkData = null;
 
+    // --- FIX 2: Track thinking state to inject <think> tags ---
+    let isThinking = false;
+    let hasFinishedThinking = false;
+
     response.data.on('data', (chunk) => {
       buffer += chunk.toString();
       const lines = buffer.split('\n');
@@ -121,25 +126,45 @@ app.post('/v1/chat/completions', async (req, res) => {
           const data = JSON.parse(line.slice(6));
           lastChunkData = data;
           const delta = data.choices?.[0]?.delta || {};
+          
           const reasoning = delta.reasoning_content || '';
           const content = delta.content || '';
-
-          // DEBUG - check Leapcell logs to see what fields are arriving
-          if (reasoning) console.log('[DEBUG] reasoning_content:', reasoning.slice(0, 80));
-          if (content)   console.log('[DEBUG] content:', content.slice(0, 80));
-          if (!reasoning && !content) console.log('[DEBUG] other delta keys:', Object.keys(delta).join(', '));
 
           accumulatedReasoning += reasoning;
           accumulatedContent += content;
 
           if (wantsStream) {
+            let mappedContent = "";
+            let hasContentToSend = false;
+
+            // Handle Reasoning Stream
             if (SHOW_REASONING && reasoning) {
-              data.choices[0].delta.reasoning_content = reasoning;
-            } else {
-              delete data.choices[0].delta.reasoning_content;
+              if (!isThinking) {
+                isThinking = true;
+                mappedContent += "<think>\n"; // Open tag for JanitorAI
+              }
+              mappedContent += reasoning;
+              hasContentToSend = true;
             }
-            data.choices[0].delta.content = content;
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+            // Handle Regular Content Stream
+            if (content) {
+              if (isThinking && !hasFinishedThinking) {
+                hasFinishedThinking = true;
+                mappedContent += "\n</think>\n\n"; // Close tag for JanitorAI
+              }
+              mappedContent += content;
+              hasContentToSend = true;
+            }
+
+            // Construct strictly OpenAI-compatible chunk
+            if (delta.role) {
+              data.choices[0].delta = { role: delta.role, content: mappedContent };
+              res.write(`data: ${JSON.stringify(data)}\n\n`);
+            } else if (hasContentToSend) {
+              data.choices[0].delta = { content: mappedContent };
+              res.write(`data: ${JSON.stringify(data)}\n\n`);
+            }
           }
         } catch (e) {
           if (wantsStream) res.write(line + '\n');
@@ -152,8 +177,14 @@ app.post('/v1/chat/completions', async (req, res) => {
         res.write('data: [DONE]\n\n');
         res.end();
       } else {
-        const msg = { role: 'assistant', content: accumulatedContent };
-        if (SHOW_REASONING && accumulatedReasoning) msg.reasoning_content = accumulatedReasoning;
+        // Fix for non-streaming requests
+        let finalContent = accumulatedContent;
+        if (SHOW_REASONING && accumulatedReasoning) {
+            finalContent = `<think>\n${accumulatedReasoning}\n</think>\n\n${accumulatedContent}`;
+        }
+        
+        const msg = { role: 'assistant', content: finalContent };
+        
         res.json({
           id: `chatcmpl-${Date.now()}`,
           object: 'chat.completion',
