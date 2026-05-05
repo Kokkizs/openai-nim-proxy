@@ -19,15 +19,9 @@ const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.c
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // 🔥 REASONING DISPLAY TOGGLE
-const SHOW_REASONING = true; // Set true to show reasoning in chat
-
-// How to display reasoning — Janitor AI drops <think> tags silently,
-// so we use markdown that actually renders in the chat bubble instead.
-const REASONING_FORMAT = {
-  prefix: '> 💭 **Thinking...**\n> ',  // Renders as a visible quote block in Janitor
-  separator: '\n> ',                    // Each line of reasoning stays inside the quote block
-  suffix: '\n\n'                        // Gap before the actual reply
-};
+// true  = pass reasoning_content as its own field so Janitor AI shows it in the gray thinking bubble
+// false = strip reasoning, only show final reply
+const SHOW_REASONING = true;
 
 // 🔥 THINKING MODE TOGGLE
 const ENABLE_THINKING_MODE = true; // Master switch — set true to enable thinking for supported models
