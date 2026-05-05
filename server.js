@@ -24,7 +24,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 const SHOW_REASONING = true;
 
 // 🔥 THINKING MODE TOGGLE
-const ENABLE_THINKING_MODE = true; // Master switch — set true to enable thinking for supported models
+const ENABLE_THINKING_MODE = false; // Master switch — set true to enable thinking for supported models
 
 // Per-model thinking config sourced from NVIDIA NIM docs.
 // Different model families use different parameter names — sending the wrong one causes a 400.
@@ -42,7 +42,7 @@ const THINKING_CONFIG = {
   'qwen/qwen3.5-397b-a17b':                     { thinking: true },
   'qwen/qwen3-235b-a22b-instruct-2507':         { thinking: true },
   'qwen/qwen3.6-35b-a3b':                       { enable_thinking: true },
-  'z-ai/glm4.7':                                { enable_thinking: true },
+  'z-ai/glm4.7':                                { enable_thinking: true, clear_thinking: false }, // clear_thinking:false preserves reasoning across turns
 };
 
 // Model mapping — updated May 2026
