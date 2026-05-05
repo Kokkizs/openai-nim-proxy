@@ -21,16 +21,27 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // 🔥 REASONING DISPLAY TOGGLE
 const SHOW_REASONING = true; // Set true to show <think> reasoning tags
 
-// 🔥 THINKING MODE TOGGLE (for models that support it)
-const ENABLE_THINKING_MODE = true; // Set true to send chat_template_kwargs: { thinking: true }
+// 🔥 THINKING MODE TOGGLE
+const ENABLE_THINKING_MODE = true; // Master switch — set true to enable thinking for supported models
 
-// Models that actually support thinking mode — others will get a 400 error if you send it
-const THINKING_SUPPORTED_MODELS = [
-  'deepseek-ai/deepseek-r1',
-  'deepseek-ai/deepseek-r1-0528',
-  'qwen/qwen3-235b-a22b-instruct-2507',
-  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-];
+// Per-model thinking config sourced from NVIDIA NIM docs.
+// Different model families use different parameter names — sending the wrong one causes a 400.
+// 'thinking'        → Kimi K2.x, Qwen3.5, DeepSeek R1
+// 'enable_thinking' → Qwen3.6, Qwen3.5 VLM variants, GLM4.x
+// DeepSeek V4 requires BOTH flags together or it hangs indefinitely.
+const THINKING_CONFIG = {
+  'deepseek-ai/deepseek-r1':                    { thinking: true },
+  'deepseek-ai/deepseek-r1-0528':               { thinking: true },
+  'deepseek-ai/deepseek-v4-flash':              { enable_thinking: true, thinking: true }, // requires both
+  'deepseek-ai/deepseek-v4-pro':                { enable_thinking: true, thinking: true }, // requires both
+  'moonshotai/kimi-k2-instruct':                { thinking: true },
+  'moonshotai/kimi-k2.5':                       { thinking: true },
+  'moonshotai/kimi-k2.6':                       { thinking: true },
+  'qwen/qwen3.5-397b-a17b':                     { thinking: true },
+  'qwen/qwen3-235b-a22b-instruct-2507':         { thinking: true },
+  'qwen/qwen3.6-35b-a3b':                       { enable_thinking: true },
+  'z-ai/glm4.7':                                { enable_thinking: true },
+};
 
 // Model mapping — updated May 2026
 const MODEL_MAPPING = {
@@ -85,8 +96,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       messages,
       temperature: temperature || 0.6,
       max_tokens: max_tokens || 9024,
-      extra_body: (ENABLE_THINKING_MODE && THINKING_SUPPORTED_MODELS.includes(nimModel))
-        ? { chat_template_kwargs: { thinking: true } }
+      extra_body: (ENABLE_THINKING_MODE && THINKING_CONFIG[nimModel])
+        ? { chat_template_kwargs: THINKING_CONFIG[nimModel] }
         : undefined,
       stream: stream || false
     };
